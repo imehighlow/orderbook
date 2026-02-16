@@ -1,0 +1,98 @@
+@startuml
+
+struct Level {
+    +Price : uint64_t
+    +Qty : uint64_t
+}
+
+' ===== Domain =====
+struct OrderBookDelta {
+    +firstUpdate : uint64_t
+    +lastUpdate  : uint64_t
+    +bids : std::vector<Level>
+    +asks : std::vector<Level>
+}
+
+struct OrderBookSnapshot {
+    +lastUpdate : uint64_t
+    +bids : std::vector<Level>
+    +asks : std::vector<Level>
+}
+
+' ===== Ingress =====
+interface ITextSink {
+    +onText(msg: std::string_view) : void
+}
+
+interface ILiveMarketData {
+    +subscribe(symbol: std::string_view, sink: ITextSink) : void
+}
+
+interface ISnapshotSource {
+    +getSnapshot(symbol: std::string_view) : OrderBookSnapshot
+}
+
+' ===== Sync =====
+interface IOrderBookSync {
+    +onDelta(delta: const OrderBookDelta&) : void
+    +onSnapshot(snapshot: const OrderBookSnapshot&) : void
+    +start(symbol: std::string_view) : void
+}
+
+' ===== Concrete exchange sources =====
+class BinanceLiveMarketData implements ILiveMarketData {
+    +subscribe(symbol: std::string_view, sink: ITextSink) : void
+    -endpoint : std::string
+    -depth : std::string
+    -updateFreq : std::string
+}
+
+class BinanceSnapshotSource implements ISnapshotSource {
+    +getSnapshot(symbol: std::string_view) : OrderBookSnapshot
+    -url : std::string
+}
+
+' ===== Sink (parsing lives here) =====
+class BinanceTextSink implements ITextSink {
+    +onText(msg: std::string_view) : void
+    +setOnDelta(handler: std::function<void(const OrderBookDelta&)>) : void
+    -onDelta : std::function<void(const OrderBookDelta&)>
+}
+
+' ===== Order book =====
+class OrderBook {
+    +applySnapshot(s: const OrderBookSnapshot&) : void
+    +applyDelta(d: const OrderBookDelta&) : void
+    +bids() : const BidMap&
+    +asks() : const AskMap&
+    -bids : std::map<Price, Qty, std::greater<>>
+    -asks : std::map<Price, Qty, std::less<>>
+    -lastUpdated : uint64_t
+}
+
+' ===== Sync implementation =====
+class BinanceOrderBookSync implements IOrderBookSync {
+    +onDelta(delta: const OrderBookDelta&) : void
+    +onSnapshot(snapshot: const OrderBookSnapshot&) : void
+    +start(symbol: std::string_view) : void
+    -book : OrderBook
+    -snap : ISnapshotSource
+    -live : ILiveMarketData
+    -sink : BinanceTextSink
+}
+
+' ===== Rendering =====
+class TerminalRenderer {
+    +render(book: const OrderBook&) : void
+}
+
+' ===== Relations =====
+BinanceOrderBookSync --> OrderBook : apply*
+BinanceOrderBookSync --> ISnapshotSource : getSnapshot()
+BinanceOrderBookSync --> ILiveMarketData : subscribe()
+BinanceOrderBookSync --> BinanceTextSink : owns
+BinanceLiveMarketData --> ITextSink : pushes raw ws text
+BinanceTextSink ..> OrderBookDelta : emits parsed delta callback
+TerminalRenderer ..> OrderBook : reads for render
+
+@enduml
