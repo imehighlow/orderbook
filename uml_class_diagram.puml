@@ -1,14 +1,26 @@
 @startuml
 
-struct Level {
-    +Price : uint64_t
-    +Qty : uint64_t
+' ===== Domain =====
+note as TypeAliases
+using Price = uint64_t;
+using Qty = uint64_t;
+using BidsMap = std::map<Price, Qty, std::greater<>>;
+using AsksMap = std::map<Price, Qty, std::greater<>>;
+end note
+
+struct SymbolScales {
+    +priceScale : uint64_t
+    +qtyScale : uint64_t
 }
 
-' ===== Domain =====
+struct Level {
+    +price : Price
+    +qty : Qty
+}
+
 struct OrderBookDelta {
     +firstUpdate : uint64_t
-    +lastUpdate  : uint64_t
+    +lastUpdate : uint64_t
     +bids : std::vector<Level>
     +asks : std::vector<Level>
 }
@@ -19,58 +31,71 @@ struct OrderBookSnapshot {
     +asks : std::vector<Level>
 }
 
-' ===== Ingress =====
+' ===== Interfaces =====
 interface ITextSink {
     +onText(msg: std::string_view) : void
 }
 
 interface ILiveMarketData {
-    +subscribe(symbol: std::string_view, sink: ITextSink) : void
+    +subscribe(symbol: std::string_view, sink: ITextSink&) : void
 }
 
 interface ISnapshotSource {
-    +getSnapshot(symbol: std::string_view) : OrderBookSnapshot
+    +getSnapshot() : OrderBookSnapshot
 }
 
-' ===== Sync =====
 interface IOrderBookSync {
     +onDelta(delta: const OrderBookDelta&) : void
     +onSnapshot(snapshot: const OrderBookSnapshot&) : void
     +start(symbol: std::string_view) : void
 }
 
-' ===== Concrete exchange sources =====
+' ===== Implemented classes =====
 class BinanceLiveMarketData implements ILiveMarketData {
-    +subscribe(symbol: std::string_view, sink: ITextSink) : void
-    -endpoint : std::string
-    -depth : std::string
-    -updateFreq : std::string
+    +subscribe(symbol: std::string_view, sink: ITextSink&) : void
+    -getTarget(symbol: std::string_view) : std::string
+    -host_ : std::string
+    -port_ : std::string
+    -updateSpeedMs_ : std::string
+}
+
+class BinanceScalesSource {
+    +getScales(symbol: std::string_view) : SymbolScales
+    -buildUrl(symbol: std::string_view) : std::string
+    -scaleFromStep(step: std::string_view) : uint64_t
+}
+
+class BinanceAPIParser {
+    +parseDelta(payload: std::string_view) : OrderBookDelta
+    +parseSnapshot(payload: std::string_view) : OrderBookSnapshot
+    -scales_ : SymbolScales
 }
 
 class BinanceSnapshotSource implements ISnapshotSource {
-    +getSnapshot(symbol: std::string_view) : OrderBookSnapshot
-    -url : std::string
+    +getSnapshot() : OrderBookSnapshot
+    -buildUrl() : std::string
+    -symbolScales() : const SymbolScales&
+    -symbol_ : std::string
+    -symbolScales_ : std::optional<SymbolScales>
 }
 
-' ===== Sink (parsing lives here) =====
+class OrderBook {
+    +applySnapshot(snapshot: const OrderBookSnapshot&) : void
+    +applyDelta(delta: const OrderBookDelta&) : void
+    +getBids() : const BidsMap&
+    +getAsks() : const AsksMap&
+    -lastUpdate_ : uint64_t
+    -asks_ : AsksMap
+    -bids_ : BidsMap
+}
+
+' ===== Not implemented yet =====
 class BinanceTextSink implements ITextSink {
     +onText(msg: std::string_view) : void
     +setOnDelta(handler: std::function<void(const OrderBookDelta&)>) : void
     -onDelta : std::function<void(const OrderBookDelta&)>
 }
 
-' ===== Order book =====
-class OrderBook {
-    +applySnapshot(s: const OrderBookSnapshot&) : void
-    +applyDelta(d: const OrderBookDelta&) : void
-    +bids() : const BidMap&
-    +asks() : const AskMap&
-    -bids : std::map<Price, Qty, std::greater<>>
-    -asks : std::map<Price, Qty, std::less<>>
-    -lastUpdated : uint64_t
-}
-
-' ===== Sync implementation =====
 class BinanceOrderBookSync implements IOrderBookSync {
     +onDelta(delta: const OrderBookDelta&) : void
     +onSnapshot(snapshot: const OrderBookSnapshot&) : void
@@ -81,18 +106,25 @@ class BinanceOrderBookSync implements IOrderBookSync {
     -sink : BinanceTextSink
 }
 
-' ===== Rendering =====
-class TerminalRenderer {
+class Renderer {
     +render(book: const OrderBook&) : void
 }
 
 ' ===== Relations =====
+BinanceLiveMarketData --> ITextSink : pushes raw ws text
+BinanceSnapshotSource --> BinanceScalesSource : requests scales
+BinanceSnapshotSource --> BinanceAPIParser : parses snapshot JSON
+BinanceAPIParser ..> SymbolScales
+BinanceAPIParser ..> OrderBookDelta
+BinanceAPIParser ..> OrderBookSnapshot
+OrderBook ..> OrderBookDelta
+OrderBook ..> OrderBookSnapshot
+
 BinanceOrderBookSync --> OrderBook : apply*
 BinanceOrderBookSync --> ISnapshotSource : getSnapshot()
 BinanceOrderBookSync --> ILiveMarketData : subscribe()
 BinanceOrderBookSync --> BinanceTextSink : owns
-BinanceLiveMarketData --> ITextSink : pushes raw ws text
 BinanceTextSink ..> OrderBookDelta : emits parsed delta callback
-TerminalRenderer ..> OrderBook : reads for render
+Renderer ..> OrderBook : render/read
 
 @enduml
