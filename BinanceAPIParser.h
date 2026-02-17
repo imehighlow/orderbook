@@ -9,8 +9,8 @@ class BinanceAPIParser {
     explicit BinanceAPIParser(SymbolScales scales)
         : scales_(scales) {
     }
-    BinanceAPIParser(const BinanceAPIParser&) = delete;
-    BinanceAPIParser(BinanceAPIParser&&) = delete;
+    BinanceAPIParser(const BinanceAPIParser&) = default;
+    BinanceAPIParser(BinanceAPIParser&&) = default;
     BinanceAPIParser& operator=(const BinanceAPIParser&) = delete;
     BinanceAPIParser& operator=(BinanceAPIParser&&) = delete;
     ~BinanceAPIParser() = default;

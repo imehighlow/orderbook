@@ -5,7 +5,6 @@
 #include <charconv>
 #include <limits>
 #include <optional>
-#include <stdexcept>
 
 namespace {
 std::optional<uint32_t> decimalPlacesFromScale(uint64_t scale) {

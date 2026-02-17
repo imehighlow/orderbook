@@ -6,7 +6,7 @@
 using Price = uint64_t;
 using Qty = uint64_t;
 using BidsMap = std::map<Price, Qty, std::greater<>>;
-using AsksMap = std::map<Price, Qty, std::greater<>>;
+using AsksMap = std::map<Price, Qty, std::less<>>;
 
 struct SymbolScales {
     uint64_t priceScale = 1;
