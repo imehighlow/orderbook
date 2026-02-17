@@ -8,6 +8,11 @@ using Qty = uint64_t;
 using BidsMap = std::map<Price, Qty, std::greater<>>;
 using AsksMap = std::map<Price, Qty, std::greater<>>;
 
+struct SymbolScales {
+    uint64_t priceScale = 1;
+    uint64_t qtyScale = 1;
+};
+
 struct Level {
     Price price = 0;
     Qty qty = 0;

@@ -7,5 +7,5 @@
 class ISnapshotSource {
   public:
     virtual ~ISnapshotSource() = default;
-    virtual OrderBookSnapshot getSnapshot(std::string_view symbol) = 0;
+    virtual OrderBookSnapshot getSnapshot() = 0;
 };
