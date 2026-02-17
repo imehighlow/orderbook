@@ -5,7 +5,7 @@ note as TypeAliases
 using Price = uint64_t;
 using Qty = uint64_t;
 using BidsMap = std::map<Price, Qty, std::greater<>>;
-using AsksMap = std::map<Price, Qty, std::greater<>>;
+using AsksMap = std::map<Price, Qty, std::less<>>;
 end note
 
 struct SymbolScales {
@@ -89,21 +89,23 @@ class OrderBook {
     -bids_ : BidsMap
 }
 
-' ===== Not implemented yet =====
 class BinanceTextSink implements ITextSink {
+    +BinanceTextSink(handler: std::function<void(const OrderBookDelta&)>, parser: BinanceAPIParser)
     +onText(msg: std::string_view) : void
     +setOnDelta(handler: std::function<void(const OrderBookDelta&)>) : void
-    -onDelta : std::function<void(const OrderBookDelta&)>
+    -onDelta_ : std::function<void(const OrderBookDelta&)>
+    -parser_ : BinanceAPIParser
 }
 
 class BinanceOrderBookSync implements IOrderBookSync {
+    +BinanceOrderBookSync(snapshotSource: ISnapshotSource&, liveMarketData: ILiveMarketData&, parser: BinanceAPIParser)
     +onDelta(delta: const OrderBookDelta&) : void
     +onSnapshot(snapshot: const OrderBookSnapshot&) : void
     +start(symbol: std::string_view) : void
-    -book : OrderBook
-    -snap : ISnapshotSource
-    -live : ILiveMarketData
-    -sink : BinanceTextSink
+    -book_ : OrderBook
+    -snapshotSource_ : ISnapshotSource&
+    -liveMarketData_ : ILiveMarketData&
+    -sink_ : BinanceTextSink
 }
 
 class Renderer {
