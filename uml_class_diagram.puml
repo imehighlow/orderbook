@@ -32,27 +32,26 @@ struct OrderBookSnapshot {
 }
 
 ' ===== Interfaces =====
-interface ITextSink {
-    +onText(msg: std::string_view) : void
-}
-
 interface ILiveMarketData {
-    +subscribe(symbol: std::string_view, sink: ITextSink&) : void
+    +start(symbol: std::string_view, onText: OnText) : void
+    +stop() : void
 }
 
 interface ISnapshotSource {
-    +getSnapshot() : OrderBookSnapshot
+    +getSnapshotAsync(onSnapshot: OnSnapshot) : void
 }
 
 interface IOrderBookSync {
     +onDelta(delta: const OrderBookDelta&) : void
     +onSnapshot(snapshot: const OrderBookSnapshot&) : void
     +start(symbol: std::string_view) : void
+    +stop() : void
 }
 
 ' ===== Implemented classes =====
 class BinanceLiveMarketData implements ILiveMarketData {
-    +subscribe(symbol: std::string_view, sink: ITextSink&) : void
+    +start(symbol: std::string_view, onText: OnText) : void
+    +stop() : void
     -getTarget(symbol: std::string_view) : std::string
     -host_ : std::string
     -port_ : std::string
@@ -72,11 +71,10 @@ class BinanceAPIParser {
 }
 
 class BinanceSnapshotSource implements ISnapshotSource {
-    +getSnapshot() : OrderBookSnapshot
-    -buildUrl() : std::string
-    -symbolScales() : const SymbolScales&
+    +getSnapshotAsync(onSnapshot: OnSnapshot) : void
+    -buildDepthUrl() : std::string
     -symbol_ : std::string
-    -symbolScales_ : std::optional<SymbolScales>
+    -scales_ : SymbolScales
 }
 
 class OrderBook {
@@ -89,32 +87,31 @@ class OrderBook {
     -bids_ : BidsMap
 }
 
-class BinanceTextSink implements ITextSink {
-    +BinanceTextSink(handler: std::function<void(const OrderBookDelta&)>, parser: BinanceAPIParser)
-    +onText(msg: std::string_view) : void
-    +setOnDelta(handler: std::function<void(const OrderBookDelta&)>) : void
-    -onDelta_ : std::function<void(const OrderBookDelta&)>
-    -parser_ : BinanceAPIParser
-}
-
 class BinanceOrderBookSync implements IOrderBookSync {
-    +BinanceOrderBookSync(snapshotSource: ISnapshotSource&, liveMarketData: ILiveMarketData&, parser: BinanceAPIParser)
+    +BinanceOrderBookSync(io: boost::asio::io_context&, snapshotSource: ISnapshotSource&, liveMarketData: ILiveMarketData&, scales: SymbolScales)
     +onDelta(delta: const OrderBookDelta&) : void
     +onSnapshot(snapshot: const OrderBookSnapshot&) : void
     +start(symbol: std::string_view) : void
+    +stop() : void
+    +setOnBookUpdated(onBookUpdated: OnBookUpdated) : void
     -book_ : OrderBook
     -snapshotSource_ : ISnapshotSource&
     -liveMarketData_ : ILiveMarketData&
-    -sink_ : BinanceTextSink
+    -parser_ : BinanceAPIParser
+    -scales_ : SymbolScales
+    -state_ : State
 }
 
 class Renderer {
-    +render(book: const OrderBook&) : void
+    +render(book: const OrderBook&, stats: const SyncStats&) : void
+}
+
+class SfmlRenderer {
+    +run(getFrame: getFrameFn, onClose: onCloseFn) : bool
 }
 
 ' ===== Relations =====
-BinanceLiveMarketData --> ITextSink : pushes raw ws text
-BinanceSnapshotSource --> BinanceScalesSource : requests scales
+BinanceScalesSource ..> SymbolScales
 BinanceSnapshotSource --> BinanceAPIParser : parses snapshot JSON
 BinanceAPIParser ..> SymbolScales
 BinanceAPIParser ..> OrderBookDelta
@@ -123,10 +120,18 @@ OrderBook ..> OrderBookDelta
 OrderBook ..> OrderBookSnapshot
 
 BinanceOrderBookSync --> OrderBook : apply*
-BinanceOrderBookSync --> ISnapshotSource : getSnapshot()
-BinanceOrderBookSync --> ILiveMarketData : subscribe()
-BinanceOrderBookSync --> BinanceTextSink : owns
-BinanceTextSink ..> OrderBookDelta : emits parsed delta callback
+BinanceOrderBookSync --> ISnapshotSource : requestSnapshot()
+BinanceOrderBookSync --> ILiveMarketData : start()/stop()
+BinanceOrderBookSync --> BinanceAPIParser : parse delta
 Renderer ..> OrderBook : render/read
+SfmlRenderer ..> BinanceOrderBookSync : displays SyncStats
+
+note bottom
+main.cpp wiring:
+1) BinanceScalesSource.getScales(symbol)
+2) construct BinanceSnapshotSource(io, symbol, scales)
+3) construct BinanceOrderBookSync(io, snapshotSource, liveMarketData, scales)
+4) choose Renderer (terminal) or SfmlRenderer (GUI)
+end note
 
 @enduml
