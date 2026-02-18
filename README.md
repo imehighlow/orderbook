@@ -49,9 +49,9 @@ Note: this project is futures-focused (`fapi.binance.com` / `fstream.binance.com
 ![UML Class Diagram](uml_class_diagram.png)
 
 ## Showcase Video
-- Terminal demo: [`assets/terminal_demo.mov`](assets/terminal_demo.mov)
-- GUI demo: [`assets/gui_demo.mov`](assets/gui_demo.mov)
+- Terminal demo GIF: [`assets/terminal_demo.gif`](assets/terminal_demo.gif)
+- GUI demo GIF: [`assets/gui_demo.gif`](assets/gui_demo.gif)
 
-<video src="assets/terminal_demo.mov" controls width="900"></video>
+![Terminal Demo](assets/terminal_demo.gif)
 
-<video src="assets/gui_demo.mov" controls width="900"></video>
+![GUI Demo](assets/gui_demo.gif)
