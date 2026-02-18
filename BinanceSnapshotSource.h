@@ -1,27 +1,36 @@
 #pragma once
-#include "BinanceScalesSource.h"
-#include "ISnapshotSource.h"
-#include "Types.h"
 
-#include <optional>
+#include "ISnapshotSource.h"
+
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <memory>
+#include <mutex>
 #include <string>
 
 class BinanceSnapshotSource : public ISnapshotSource {
   public:
-    // 100 and 1000 are only values allowed by binance, default to 100
-    explicit BinanceSnapshotSource(std::string symbol) : symbol_(std::move(symbol)) {}
-    BinanceSnapshotSource(const BinanceSnapshotSource&) = delete;
-    BinanceSnapshotSource(BinanceSnapshotSource&&) = delete;
-    BinanceSnapshotSource& operator=(const BinanceSnapshotSource&) = delete;
-    BinanceSnapshotSource& operator=(BinanceSnapshotSource&&) = delete;
-    virtual ~BinanceSnapshotSource() = default;
+    explicit BinanceSnapshotSource(boost::asio::io_context& ioContext, std::string symbol,
+                                   SymbolScales scales)
+        : ioContext_(ioContext),
+          sslContext_(boost::asio::ssl::context::tls_client),
+          symbol_(std::move(symbol)),
+          scales_(scales) {
+    }
+    ~BinanceSnapshotSource() override;
 
-  public:
-    OrderBookSnapshot getSnapshot() override final;
+    void getSnapshotAsync(OnSnapshot onSnapshot) override final;
 
   private:
-    std::string buildUrl() const;
-    const SymbolScales& symbolScales();
+    struct Request;
+    std::string buildDepthUrl() const;
+    void ensureTlsContextConfigured();
+
+    boost::asio::io_context& ioContext_;
+    boost::asio::ssl::context sslContext_;
     const std::string symbol_;
-    std::optional<SymbolScales> symbolScales_;
+    const SymbolScales scales_;
+    std::once_flag tlsContextInitOnce_;
+    std::mutex mutex_;
+    std::shared_ptr<Request> request_;
 };

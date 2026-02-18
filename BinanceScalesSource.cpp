@@ -10,21 +10,78 @@
 #include <boost/json.hpp>
 #include <cctype>
 #include <format>
+#include <limits>
 #include <openssl/err.h>
+#include <optional>
 #include <stdexcept>
 
 namespace {
-constexpr std::string_view host = "api.binance.com";
+namespace asio = boost::asio;
+namespace ssl = asio::ssl;
+namespace beast = boost::beast;
+namespace http = beast::http;
+namespace json = boost::json;
+
+constexpr std::string_view host = "fapi.binance.com";
 constexpr std::string_view port = "443";
-} // namespace
+constexpr uint64_t kMinPriceScale = 100000000ULL;
 
-SymbolScales BinanceScalesSource::getScales(std::string_view symbol) const {
-    namespace asio = boost::asio;
-    namespace ssl = asio::ssl;
-    namespace beast = boost::beast;
-    namespace http = beast::http;
-    namespace json = boost::json;
+std::string toUpperCopy(std::string_view value) {
+    std::string out(value);
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return out;
+}
 
+std::optional<uint64_t> scaleFromPrecisionField(const boost::json::object& symbolObj,
+                                                std::string_view fieldName) {
+    const auto* value = symbolObj.if_contains(fieldName);
+    if (!value) {
+        return std::nullopt;
+    }
+
+    int64_t precision = -1;
+    if (value->is_int64()) {
+        precision = value->as_int64();
+    } else if (value->is_uint64()) {
+        const auto raw = value->as_uint64();
+        if (raw > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+            return std::nullopt;
+        }
+        precision = static_cast<int64_t>(raw);
+    } else {
+        return std::nullopt;
+    }
+
+    if (precision <= 0) {
+        return uint64_t{1};
+    }
+
+    uint64_t scale = 1;
+    for (int64_t i = 0; i < precision; ++i) {
+        if (scale > std::numeric_limits<uint64_t>::max() / 10) {
+            return std::nullopt;
+        }
+        scale *= 10;
+    }
+    return scale;
+}
+
+uint64_t scaleFromStepValue(std::string_view step) {
+    const auto dotPos = step.find('.');
+    if (dotPos == std::string_view::npos) {
+        return 1;
+    }
+
+    const size_t decimals = step.size() - dotPos - 1;
+    uint64_t scale = 1;
+    for (size_t i = 0; i < decimals; ++i) {
+        scale *= 10;
+    }
+    return scale;
+}
+
+std::string fetchExchangeInfoBody(std::string_view target) {
     asio::io_context io;
     ssl::context tls{ssl::context::tls_client};
     tls.set_default_verify_paths();
@@ -44,7 +101,7 @@ SymbolScales BinanceScalesSource::getScales(std::string_view symbol) const {
     stream.set_verify_callback(ssl::host_name_verification(std::string(host)));
     stream.handshake(ssl::stream_base::client);
 
-    http::request<http::empty_body> req{http::verb::get, buildUrl(symbol), 11};
+    http::request<http::empty_body> req{http::verb::get, std::string(target), 11};
     req.set(http::field::host, host);
     req.set(http::field::user_agent, "orderbook/1.0");
     http::write(stream, req);
@@ -59,26 +116,78 @@ SymbolScales BinanceScalesSource::getScales(std::string_view symbol) const {
                                              std::string(res.reason())));
     }
 
-    const auto& root = json::parse(res.body()).as_object();
-    const auto& symbols = root.at("symbols").as_array();
+    beast::error_code ec;
+    (void)stream.shutdown(ec);
+
+    return std::move(res.body());
+}
+
+json::value parseExchangeInfo(std::string_view body) {
+    boost::system::error_code parseEc;
+    auto parsed = json::parse(body, parseEc);
+    if (parseEc || !parsed.is_object()) {
+        throw std::runtime_error("exchangeInfo response is not a valid JSON object");
+    }
+    return parsed;
+}
+
+const json::object& findSymbolObject(const json::object& root, std::string_view wantedSymbol) {
+    const auto* symbolsValue = root.if_contains("symbols");
+    if (!symbolsValue || !symbolsValue->is_array()) {
+        throw std::runtime_error("exchangeInfo response missing symbols array");
+    }
+
+    const auto& symbols = symbolsValue->as_array();
     if (symbols.empty()) {
         throw std::runtime_error("exchangeInfo.symbols is empty");
     }
-    const auto& symObj = symbols.front().as_object();
-    const auto& filters = symObj.at("filters").as_array();
+
+    for (const auto& symbolValue : symbols) {
+        if (!symbolValue.is_object()) {
+            continue;
+        }
+        const auto& symbolObj = symbolValue.as_object();
+        const auto* symbolName = symbolObj.if_contains("symbol");
+        if (symbolName && symbolName->is_string() &&
+            std::string_view(symbolName->as_string().data(), symbolName->as_string().size()) ==
+                wantedSymbol) {
+            return symbolObj;
+        }
+    }
+
+    throw std::runtime_error(std::format("Symbol not found in exchangeInfo: {}", wantedSymbol));
+}
+
+std::pair<std::string, std::string> extractTickAndStep(const json::object& symbolObj) {
+    const auto* filtersValue = symbolObj.if_contains("filters");
+    if (!filtersValue || !filtersValue->is_array()) {
+        throw std::runtime_error("exchangeInfo.symbol.filters is missing");
+    }
 
     std::string tickSize;
     std::string stepSize;
-    for (const auto& filterValue : filters) {
+    for (const auto& filterValue : filtersValue->as_array()) {
+        if (!filterValue.is_object()) {
+            continue;
+        }
         const auto& filter = filterValue.as_object();
-        const auto type = std::string_view(filter.at("filterType").as_string().data(),
-                                           filter.at("filterType").as_string().size());
+        const auto* filterType = filter.if_contains("filterType");
+        if (!filterType || !filterType->is_string()) {
+            continue;
+        }
+
+        const auto type = std::string_view(filterType->as_string().data(),
+                                           filterType->as_string().size());
         if (type == "PRICE_FILTER") {
-            const auto& tick = filter.at("tickSize").as_string();
-            tickSize = std::string(tick.data(), tick.size());
+            const auto* tick = filter.if_contains("tickSize");
+            if (tick && tick->is_string()) {
+                tickSize = std::string(tick->as_string().data(), tick->as_string().size());
+            }
         } else if (type == "LOT_SIZE") {
-            const auto& step = filter.at("stepSize").as_string();
-            stepSize = std::string(step.data(), step.size());
+            const auto* step = filter.if_contains("stepSize");
+            if (step && step->is_string()) {
+                stepSize = std::string(step->as_string().data(), step->as_string().size());
+            }
         }
     }
 
@@ -86,27 +195,40 @@ SymbolScales BinanceScalesSource::getScales(std::string_view symbol) const {
         throw std::runtime_error("Missing PRICE_FILTER.tickSize or LOT_SIZE.stepSize");
     }
 
+    return {std::move(tickSize), std::move(stepSize)};
+}
+
+SymbolScales buildScales(const json::object& symbolObj, std::string_view tickSize,
+                         std::string_view stepSize) {
     SymbolScales scales{};
-    scales.priceScale = scaleFromStep(tickSize);
-    scales.qtyScale = scaleFromStep(stepSize);
-
-    beast::error_code ec;
-    auto shutdownEc = stream.shutdown(ec);
-    if (shutdownEc == asio::ssl::error::stream_truncated || shutdownEc == asio::error::eof) {
-        shutdownEc = {};
+    scales.priceScale = scaleFromStepValue(tickSize);
+    scales.qtyScale = scaleFromStepValue(stepSize);
+    if (const auto precisionScale = scaleFromPrecisionField(symbolObj, "pricePrecision")) {
+        scales.priceScale = std::max(scales.priceScale, *precisionScale);
     }
-    if (shutdownEc) {
-        throw beast::system_error{shutdownEc};
+    if (const auto precisionScale = scaleFromPrecisionField(symbolObj, "quantityPrecision")) {
+        scales.qtyScale = std::max(scales.qtyScale, *precisionScale);
     }
-
+    scales.priceScale = std::max(scales.priceScale, kMinPriceScale);
     return scales;
+}
+} // namespace
+
+SymbolScales BinanceScalesSource::getScales(std::string_view symbol) const {
+    const std::string body = fetchExchangeInfoBody(buildUrl(symbol));
+    const auto parsed = parseExchangeInfo(body);
+    const auto& root = parsed.as_object();
+    const std::string wantedSymbol = toUpperCopy(symbol);
+    const auto& symbolObj = findSymbolObject(root, wantedSymbol);
+    const auto [tickSize, stepSize] = extractTickAndStep(symbolObj);
+    return buildScales(symbolObj, tickSize, stepSize);
 }
 
 std::string BinanceScalesSource::buildUrl(std::string_view symbol) const {
     std::string upperSymbol(symbol);
     std::transform(upperSymbol.begin(), upperSymbol.end(), upperSymbol.begin(),
                    [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    return std::format("/api/v3/exchangeInfo?symbol={}", upperSymbol);
+    return std::format("/fapi/v1/exchangeInfo?symbol={}", upperSymbol);
 }
 
 uint64_t BinanceScalesSource::scaleFromStep(std::string_view step) {
@@ -115,12 +237,9 @@ uint64_t BinanceScalesSource::scaleFromStep(std::string_view step) {
         return 1;
     }
 
-    size_t end = step.size();
-    while (end > dotPos + 1 && step[end - 1] == '0') {
-        --end;
-    }
-
-    const size_t decimals = end - dotPos - 1;
+    // Preserve full fractional width from exchange metadata. Trimming trailing
+    // zeros can under-estimate precision for some symbols.
+    const size_t decimals = step.size() - dotPos - 1;
     uint64_t scale = 1;
     for (size_t i = 0; i < decimals; ++i) {
         scale *= 10;

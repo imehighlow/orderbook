@@ -8,13 +8,6 @@
 
 class BinanceScalesSource {
   public:
-    BinanceScalesSource() = default;
-    BinanceScalesSource(const BinanceScalesSource&) = delete;
-    BinanceScalesSource(BinanceScalesSource&&) = delete;
-    BinanceScalesSource& operator=(const BinanceScalesSource&) = delete;
-    BinanceScalesSource& operator=(BinanceScalesSource&&) = delete;
-    ~BinanceScalesSource() = default;
-
     SymbolScales getScales(std::string_view symbol) const;
 
   private:
