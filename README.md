@@ -3,6 +3,13 @@
 Low-latency C++20 local order book synchronizer for Binance USD-M futures.
 It keeps a local book consistent using REST snapshot + WebSocket depth deltas, then renders live depth in terminal or SFML UI.
 
+## Showcase
+
+<p align="center">
+  <img src="assets/terminal_demo.gif" width="48%" />
+  <img src="assets/gui_demo.gif" width="48%" />
+</p>
+
 ## What This Project Does
 - Bootstraps from futures snapshot (`/fapi/v1/depth`) and streams incremental depth updates.
 - Maintains local bids/asks with sequencing checks and automatic resync.
@@ -48,10 +55,3 @@ Note: this project is futures-focused (`fapi.binance.com` / `fstream.binance.com
 
 ![UML Class Diagram](uml_class_diagram.png)
 
-## Showcase Video
-- Terminal demo GIF: [`assets/terminal_demo.gif`](assets/terminal_demo.gif)
-- GUI demo GIF: [`assets/gui_demo.gif`](assets/gui_demo.gif)
-
-![Terminal Demo](assets/terminal_demo.gif)
-
-![GUI Demo](assets/gui_demo.gif)
