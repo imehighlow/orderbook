@@ -1,2 +1,11 @@
-*png
 AGENTS.md
+
+# CMake / build artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Build output binary
+orderbook
