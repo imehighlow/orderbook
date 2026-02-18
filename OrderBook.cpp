@@ -18,18 +18,14 @@ void OrderBook::applySnapshot(const OrderBookSnapshot& snapshot) {
     lastUpdate_ = snapshot.lastUpdate;
     asks_.clear();
     bids_.clear();
-    for (const auto& lvl : snapshot.asks) {
-        asks_[lvl.price] = lvl.qty;
-    }
-
-    for (const auto& lvl : snapshot.bids) {
-        bids_[lvl.price] = lvl.qty;
-    }
+    applySide(asks_, snapshot.asks);
+    applySide(bids_, snapshot.bids);
 }
 
 void OrderBook::applyDelta(const OrderBookDelta& delta) {
     applySide(asks_, delta.asks);
     applySide(bids_, delta.bids);
+    lastUpdate_ = delta.lastUpdate;
 }
 
 const BidsMap& OrderBook::getBids() const {
@@ -38,4 +34,8 @@ const BidsMap& OrderBook::getBids() const {
 
 const AsksMap& OrderBook::getAsks() const {
     return asks_;
+}
+
+uint64_t OrderBook::getLastUpdate() const {
+    return lastUpdate_;
 }

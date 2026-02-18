@@ -2,6 +2,7 @@
 
 #include "Types.h"
 
+#include <string>
 #include <string_view>
 
 class BinanceAPIParser {
@@ -9,14 +10,12 @@ class BinanceAPIParser {
     explicit BinanceAPIParser(SymbolScales scales)
         : scales_(scales) {
     }
-    BinanceAPIParser(const BinanceAPIParser&) = default;
-    BinanceAPIParser(BinanceAPIParser&&) = default;
-    BinanceAPIParser& operator=(const BinanceAPIParser&) = delete;
-    BinanceAPIParser& operator=(BinanceAPIParser&&) = delete;
-    ~BinanceAPIParser() = default;
 
     OrderBookDelta parseDelta(std::string_view payload) const;
     OrderBookSnapshot parseSnapshot(std::string_view payload) const;
+    std::string formatPrice(Price price) const;
+    std::string formatQty(Qty qty) const;
+    static std::string formatScaled(uint64_t value, uint64_t scale);
 
   private:
     SymbolScales scales_{};

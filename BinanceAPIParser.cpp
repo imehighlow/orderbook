@@ -3,8 +3,10 @@
 #include <boost/json.hpp>
 #include <boost/system/error_code.hpp>
 #include <charconv>
+#include <initializer_list>
 #include <limits>
 #include <optional>
+#include <string>
 
 namespace {
 std::optional<uint32_t> decimalPlacesFromScale(uint64_t scale) {
@@ -34,16 +36,11 @@ std::optional<uint64_t> parseUint(std::string_view s) {
     return out;
 }
 
-std::optional<uint64_t> parseScaledDecimal(std::string_view s, uint64_t scale) {
-    const auto placesOpt = decimalPlacesFromScale(scale);
-    if (!placesOpt) {
-        return std::nullopt;
-    }
-    const uint32_t places = *placesOpt;
-
+std::optional<uint64_t> parseScaledDecimal(std::string_view s, uint64_t scale, uint32_t places) {
     const size_t dot = s.find('.');
     const std::string_view intPart = (dot == std::string_view::npos) ? s : s.substr(0, dot);
-    std::string_view fracPart = (dot == std::string_view::npos) ? std::string_view{} : s.substr(dot + 1);
+    std::string_view fracPart =
+        (dot == std::string_view::npos) ? std::string_view{} : s.substr(dot + 1);
 
     if (intPart.empty()) {
         return std::nullopt;
@@ -55,11 +52,8 @@ std::optional<uint64_t> parseScaledDecimal(std::string_view s, uint64_t scale) {
     }
 
     if (fracPart.size() > places) {
-        for (size_t i = places; i < fracPart.size(); ++i) {
-            if (fracPart[i] != '0') {
-                return std::nullopt;
-            }
-        }
+        // Be tolerant when payload has finer precision than configured scale.
+        // Keep the supported precision and drop excess fractional digits.
         fracPart = fracPart.substr(0, places);
     }
 
@@ -103,17 +97,18 @@ std::optional<uint64_t> parseJsonU64(const boost::json::value& v) {
     return parseUint(std::string_view(s.data(), s.size()));
 }
 
-std::optional<uint64_t> parseJsonScaled(const boost::json::value& v, uint64_t scale) {
+std::optional<uint64_t> parseJsonScaled(const boost::json::value& v, uint64_t scale,
+                                        uint32_t places) {
     if (!v.is_string()) {
         return std::nullopt;
     }
     const auto s = v.as_string();
-    return parseScaledDecimal(std::string_view(s.data(), s.size()), scale);
+    return parseScaledDecimal(std::string_view(s.data(), s.size()), scale, places);
 }
 
 std::optional<std::vector<Level>> parseJsonSide(const boost::json::value& sideValue,
-                                                uint64_t priceScale,
-                                                uint64_t qtyScale) {
+                                                uint64_t priceScale, uint64_t qtyScale,
+                                                uint32_t pricePlaces, uint32_t qtyPlaces) {
     if (!sideValue.is_array()) {
         return std::nullopt;
     }
@@ -128,14 +123,24 @@ std::optional<std::vector<Level>> parseJsonSide(const boost::json::value& sideVa
         if (row.size() < 2) {
             return std::nullopt;
         }
-        const auto price = parseJsonScaled(row[0], priceScale);
-        const auto qty = parseJsonScaled(row[1], qtyScale);
+        const auto price = parseJsonScaled(row[0], priceScale, pricePlaces);
+        const auto qty = parseJsonScaled(row[1], qtyScale, qtyPlaces);
         if (!price || !qty) {
             return std::nullopt;
         }
         out.push_back(Level{.price = *price, .qty = *qty});
     }
     return out;
+}
+
+const boost::json::value* firstExisting(const boost::json::object& obj,
+                                        std::initializer_list<std::string_view> keys) {
+    for (const auto key : keys) {
+        if (const auto* value = obj.if_contains(key)) {
+            return value;
+        }
+    }
+    return nullptr;
 }
 } // namespace
 
@@ -148,34 +153,27 @@ OrderBookDelta BinanceAPIParser::parseDelta(std::string_view input) const {
     }
 
     const auto& obj = parsed.as_object();
-    const auto* firstUpdate = obj.if_contains("U");
-    if (!firstUpdate) {
-        firstUpdate = obj.if_contains("firstUpdateId");
-    }
-
-    const auto* lastUpdate = obj.if_contains("u");
-    if (!lastUpdate) {
-        lastUpdate = obj.if_contains("finalUpdateId");
-    }
-
-    const auto* bids = obj.if_contains("b");
-    if (!bids) {
-        bids = obj.if_contains("bids");
-    }
-
-    const auto* asks = obj.if_contains("a");
-    if (!asks) {
-        asks = obj.if_contains("asks");
-    }
+    const auto* firstUpdate = firstExisting(obj, {"U", "firstUpdateId"});
+    const auto* lastUpdate = firstExisting(obj, {"u", "finalUpdateId"});
+    const auto* bids = firstExisting(obj, {"b", "bids"});
+    const auto* asks = firstExisting(obj, {"a", "asks"});
 
     if (!firstUpdate || !lastUpdate || !bids || !asks) {
         return {};
     }
 
+    const auto pricePlaces = decimalPlacesFromScale(scales_.priceScale);
+    const auto qtyPlaces = decimalPlacesFromScale(scales_.qtyScale);
+    if (!pricePlaces || !qtyPlaces) {
+        return {};
+    }
+
     const auto parsedFirstUpdate = parseJsonU64(*firstUpdate);
     const auto parsedLastUpdate = parseJsonU64(*lastUpdate);
-    const auto parsedBids = parseJsonSide(*bids, scales_.priceScale, scales_.qtyScale);
-    const auto parsedAsks = parseJsonSide(*asks, scales_.priceScale, scales_.qtyScale);
+    const auto parsedBids =
+        parseJsonSide(*bids, scales_.priceScale, scales_.qtyScale, *pricePlaces, *qtyPlaces);
+    const auto parsedAsks =
+        parseJsonSide(*asks, scales_.priceScale, scales_.qtyScale, *pricePlaces, *qtyPlaces);
     if (!parsedFirstUpdate || !parsedLastUpdate || !parsedBids || !parsedAsks) {
         return {};
     }
@@ -203,9 +201,17 @@ OrderBookSnapshot BinanceAPIParser::parseSnapshot(std::string_view input) const 
         return {};
     }
 
+    const auto pricePlaces = decimalPlacesFromScale(scales_.priceScale);
+    const auto qtyPlaces = decimalPlacesFromScale(scales_.qtyScale);
+    if (!pricePlaces || !qtyPlaces) {
+        return {};
+    }
+
     const auto parsedLastUpdate = parseJsonU64(*lastUpdateId);
-    const auto parsedBids = parseJsonSide(*bids, scales_.priceScale, scales_.qtyScale);
-    const auto parsedAsks = parseJsonSide(*asks, scales_.priceScale, scales_.qtyScale);
+    const auto parsedBids =
+        parseJsonSide(*bids, scales_.priceScale, scales_.qtyScale, *pricePlaces, *qtyPlaces);
+    const auto parsedAsks =
+        parseJsonSide(*asks, scales_.priceScale, scales_.qtyScale, *pricePlaces, *qtyPlaces);
     if (!parsedLastUpdate || !parsedBids || !parsedAsks) {
         return {};
     }
@@ -214,4 +220,35 @@ OrderBookSnapshot BinanceAPIParser::parseSnapshot(std::string_view input) const 
         .bids = std::move(*parsedBids),
         .asks = std::move(*parsedAsks),
     };
+}
+
+std::string BinanceAPIParser::formatPrice(Price price) const {
+    return formatScaled(price, scales_.priceScale);
+}
+
+std::string BinanceAPIParser::formatQty(Qty qty) const {
+    return formatScaled(qty, scales_.qtyScale);
+}
+
+std::string BinanceAPIParser::formatScaled(uint64_t value, uint64_t scale) {
+    const auto places = decimalPlacesFromScale(scale);
+    if (!places || *places == 0) {
+        return std::to_string(value);
+    }
+
+    const uint64_t whole = value / scale;
+    const uint64_t frac = value % scale;
+
+    std::string fracStr = std::to_string(frac);
+    if (fracStr.size() < *places) {
+        fracStr.insert(fracStr.begin(), *places - fracStr.size(), '0');
+    }
+    while (!fracStr.empty() && fracStr.back() == '0') {
+        fracStr.pop_back();
+    }
+    if (fracStr.empty()) {
+        return std::to_string(whole) + ".0";
+    }
+
+    return std::to_string(whole) + "." + fracStr;
 }
